@@ -1,9 +1,15 @@
 import { MODULE_BY_KEY } from '@/data/modules'
-import { allRows, listRows, resetRows, saveRows } from '@/data/local-store'
+import { allRows, getSeedReport, listRows, resetRows, resumeSeedLoad, saveRows } from '@/data/local-store'
 import type { ActionResult, EntryRow, ModuleMeta, OverviewResult, PageResult } from '@/data/types'
 
 // 会写进数据的「往回走」动作：命中就把这条记录标成异常态，看板上能一眼看出来。
 const NEGATIVE_ACTIONS = ['撤销', '作废', '拒绝', '驳回', '停用', '忽略', '下线', '回滚']
+
+// 行李转运的到达结论（终态）：出现这些状态时要同步到航班保障清单。
+const ARRIVAL_CONCLUSIONS = new Set(['已到达', '异常滞留'])
+
+// 示例数据装载的报告与续做入口，页面统一从这里拿，不直接碰数据层。
+export { getSeedReport, resumeSeedLoad }
 
 export function moduleMeta(key: string): ModuleMeta {
   const meta = MODULE_BY_KEY.get(key)
@@ -53,7 +59,42 @@ export function runAction(key: string, id: number, action: string): ActionResult
   const next = [...rows]
   next[index] = updated
   saveRows(key, next)
-  return { ok: true, message: `${meta.entity}已${action}，当前状态「${target}」` }
+  let syncNote = ''
+  if (key === 'baggage' && ARRIVAL_CONCLUSIONS.has(target)) {
+    const synced = syncArrivalToFlightOps(updated, target)
+    if (synced.length > 0) {
+      syncNote = `；航班保障 ${synced.join('、')} 已同步到达结论`
+    }
+  }
+  return { ok: true, message: `${meta.entity}已${action}，当前状态「${target}」${syncNote}` }
+}
+
+/**
+ * 跨模块联动：行李转运给出到达结论后，把同一航班的航班保障清单同步掉——
+ * 保障节点写上到达结论（已到达带上到达转盘），保障状态跟着转运结论走。
+ */
+function syncArrivalToFlightOps(baggage: EntryRow, target: string): string[] {
+  const flightNo = String(baggage['关联航班'] ?? '').trim()
+  if (!flightNo) {
+    return []
+  }
+  const node =
+    target === '已到达'
+      ? `行李已到达（转盘 ${String(baggage['到达转盘'] ?? '—')}）`
+      : '行李异常滞留'
+  const rows = listRows('flight_ops')
+  let touched = false
+  const next = rows.map((row) => {
+    if (String(row['航班号'] ?? '').trim() !== flightNo) {
+      return row
+    }
+    touched = true
+    return { ...row, '保障节点': node, '保障状态': `行李${target}` }
+  })
+  if (touched) {
+    saveRows('flight_ops', next)
+  }
+  return touched ? [flightNo] : []
 }
 
 export function resetModule(key: string): PageResult {

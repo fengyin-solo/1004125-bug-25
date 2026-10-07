@@ -24,6 +24,13 @@
       </span>
     </p>
 
+    <div v-if="seedIssues.length" class="seed-alert" role="alert">
+      <p v-for="issue in seedIssues" :key="`${issue.module}:${issue.rowId}`" class="seed-alert-text">
+        {{ issue.message }}
+      </p>
+      <button class="btn" type="button" @click="resumeSeed">从异常行续做</button>
+    </div>
+
     <form class="filter-bar" @submit.prevent="reload">
       <label v-for="field in filterFields" :key="field" class="filter-item">
         <span>{{ field }}</span>
@@ -75,11 +82,13 @@ import { computed, onMounted, ref } from 'vue'
 
 import {
   downloadEntries,
+  getSeedReport,
   listEntries,
   moduleMeta,
+  resumeSeedLoad,
   runAction as applyAction,
 } from '@/api/local-service'
-import type { EntryRow } from '@/data/types'
+import type { EntryRow, SeedIssue } from '@/data/types'
 
 const meta = moduleMeta('baggage')
 const columns = ["转运编号", "关联航班", "行李件数", "出发转盘", "到达转盘", "装卸人员", "转运时长", "转运状态"]
@@ -90,6 +99,7 @@ const stats = [{"label": "待卸机航班", "value": 0}, {"label": "转运中航
 const rows = ref<EntryRow[]>([])
 const total = ref(0)
 const errorMessage = ref('')
+const seedIssues = ref<SeedIssue[]>([])
 const filters = ref<Record<string, string>>({})
 const filterFields = columns.slice(0, 3)
 const statusSummary = computed(() =>
@@ -122,6 +132,18 @@ function runAction(action: string, row: EntryRow) {
   reload()
 }
 
+function refreshSeedIssues() {
+  seedIssues.value = getSeedReport().issues
+}
+
+function resumeSeed() {
+  const report = resumeSeedLoad()
+  seedIssues.value = report.issues
+  if (report.ok) {
+    reload()
+  }
+}
+
 function reload() {
   errorMessage.value = ''
   try {
@@ -133,5 +155,8 @@ function reload() {
   }
 }
 
-onMounted(reload)
+onMounted(() => {
+  refreshSeedIssues()
+  reload()
+})
 </script>

@@ -3,3 +3,6 @@ services:
     build: ./frontend
     ports:
       - "5173:5173"
+    env_file:
+      # 与本地开发共用同一份环境模板，部署构建不再另起一份配置
+      - .env.example
