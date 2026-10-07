@@ -1,9 +1,67 @@
 import { MODULE_BY_KEY } from '@/data/modules'
-import { allRows, listRows, resetRows, saveRows } from '@/data/local-store'
+import { allRows, listRows, resetRows, saveRows, storeNotice } from '@/data/local-store'
 import type { ActionResult, EntryRow, ModuleMeta, OverviewResult, PageResult } from '@/data/types'
 
 // 会写进数据的「往回走」动作：命中就把这条记录标成异常态，看板上能一眼看出来。
 const NEGATIVE_ACTIONS = ['撤销', '作废', '拒绝', '驳回', '停用', '忽略', '下线', '回滚']
+
+// 跨模块联动：动作成功后把结论写进关联模块的匹配行。
+// 目前登记一条：行李转运「确认到达」后，到达结论同步到航班保障清单里同一航班的记录。
+type SyncRule = {
+  module: string
+  action: string
+  target: string
+  /** 目标模块里用来匹配的字段 */
+  matchField: string
+  /** 当前行里提供匹配值的字段 */
+  sourceField: string
+  write: Record<string, string>
+  label: string
+}
+
+const SYNC_RULES: SyncRule[] = [
+  {
+    module: 'baggage',
+    action: '确认到达',
+    target: 'flight_ops',
+    matchField: '航班号',
+    sourceField: '关联航班',
+    write: { 保障节点: '行李已到达', 保障状态: '行李已到达' },
+    label: '到达结论',
+  },
+]
+
+function applySyncRules(key: string, action: string, row: EntryRow): string {
+  const notes: string[] = []
+  for (const rule of SYNC_RULES) {
+    if (rule.module !== key || rule.action !== action) {
+      continue
+    }
+    const targetMeta = MODULE_BY_KEY.get(rule.target)
+    if (!targetMeta) {
+      continue
+    }
+    const mark = String(row[rule.sourceField] ?? '')
+    const rows = listRows(rule.target)
+    const index = rows.findIndex((item) => String(item[rule.matchField] ?? '') === mark)
+    if (index < 0) {
+      notes.push(
+        `${rule.label}未同步：${targetMeta.name}中没有 ${rule.matchField}「${mark}」（依赖缺失，请先补齐该航班）`,
+      )
+      continue
+    }
+    const next = [...rows]
+    next[index] = { ...next[index], ...rule.write }
+    saveRows(rule.target, next)
+    notes.push(`${rule.label}已同步到${targetMeta.name}（${rule.matchField} ${mark}）`)
+  }
+  return notes.join('；')
+}
+
+/** 数据初始化失败（如依赖缺失）的说明；正常时为 null。 */
+export function initNotice(): string | null {
+  return storeNotice()
+}
 
 export function moduleMeta(key: string): ModuleMeta {
   const meta = MODULE_BY_KEY.get(key)
@@ -53,7 +111,9 @@ export function runAction(key: string, id: number, action: string): ActionResult
   const next = [...rows]
   next[index] = updated
   saveRows(key, next)
-  return { ok: true, message: `${meta.entity}已${action}，当前状态「${target}」` }
+  const syncNote = applySyncRules(key, action, updated)
+  const message = `${meta.entity}已${action}，当前状态「${target}」`
+  return { ok: true, message: syncNote ? `${message}；${syncNote}` : message }
 }
 
 export function resetModule(key: string): PageResult {

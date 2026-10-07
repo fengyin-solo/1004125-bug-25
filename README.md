@@ -7,15 +7,36 @@
 结果都持久化在浏览器 `localStorage` 里，刷新或重开浏览器都还在。dev server 已关掉自动打开页面，
 启动后按终端打印的地址手工打开。
 
+## 数据初始化（本地与部署共用一份逻辑）
+
+所有环境的数据初始化统一走 `frontend/src/data/bootstrap.ts`，只有这一份播种逻辑：
+
+- **幂等**：按各模块第一个字段（转运编号、航班号等业务键）upsert，反复装载不会多出记录。
+- **版本收敛**：`seed.ts` 里的 `SEED_VERSION` 随示例数据变化递增；本地缓存版本不一致时按
+  种子收敛（同键覆盖、废键清除），依赖升级重建后不会再残留旧转运状态。
+- **断点续做**：每装一行推进一次断点并落盘，中断后下次从异常行继续，已装载的行不重复。
+- **依赖校验**：行李转运的「关联航班」必须存在于航班保障的「航班号」里（航班保障先装载）。
+  缺依赖时装载停在该行，错误说明缺什么、停在哪，页面会展示该提示。
+- **跨模块联动**：行李转运「确认到达」后，到达结论（保障节点/保障状态）自动同步到
+  航班保障清单里同一航班的记录；联动规则登记在 `local-service.ts` 的 `SYNC_RULES`。
+
+数据层自检（不依赖浏览器，覆盖幂等、续做、依赖缺失、版本迁移、联动同步）：
+
+```bash
+cd frontend
+npm run selfcheck
+```
+
 ## 目录结构
 
 ```text
 .
 ├── frontend/                 Vue 3 + Vite + TypeScript 前端（唯一运行单元）
 │   ├── src/views/            每个业务模块一个页面
-│   ├── src/api/local-service.ts   本地数据服务：列表、筛选、动作流转、导出
-│   ├── src/data/             模块元数据 / 示例数据 / localStorage 持久化
+│   ├── src/api/local-service.ts   本地数据服务：列表、筛选、动作流转、跨模块联动、导出
+│   ├── src/data/             模块元数据 / 示例数据 / 统一初始化（bootstrap）/ localStorage 持久化
 │   ├── src/stores/           会话与筛选状态
+│   ├── scripts/selfcheck.ts  数据层自检（npm run selfcheck）
 │   └── vite.config.ts        dev server 配置（open: false，无 /api 代理）
 ├── .gitignore
 └── docker-compose.yml
@@ -25,17 +46,24 @@
 
 ```bash
 cd frontend
-npm install
+npm ci        # 按 package-lock.json 严格安装，和部署构建同一批依赖版本
 npm run dev
 ```
 
 前端默认监听 `http://127.0.0.1:5173/`，dev server 不会自动打开浏览器，需要自己访问。
 
-生产构建：
+生产构建与本地预览：
 
 ```bash
 cd frontend
 npm run build
+npm run preview
+```
+
+Docker 部署（多阶段构建：`npm ci` → 生产构建 → `vite preview` 伺服 dist，端口同为 5173）：
+
+```bash
+docker compose up --build
 ```
 
 ## 业务模块
@@ -65,7 +93,9 @@ npm run build
 
 - 每个模块的页面在 `frontend/src/views/<模块>/index.vue`，页面只负责渲染，读写统一走
   `frontend/src/api/local-service.ts`。
-- 字段、状态、动作与流转目标集中在 `frontend/src/data/modules.ts`；示例数据在
-  `frontend/src/data/seed.ts`。
-- 状态流转只允许在 `local-service.ts` 里改，页面组件不做业务判断。
+- 字段、状态、动作与流转目标集中在 `frontend/src/data/modules.ts`；示例数据与数据版本在
+  `frontend/src/data/seed.ts`；初始化（幂等、断点续做、依赖校验、版本收敛）在
+  `frontend/src/data/bootstrap.ts`。
+- 状态流转只允许在 `local-service.ts` 里改，页面组件不做业务判断；跨模块联动规则
+  （如行李到达 → 航班保障清单）也登记在 `local-service.ts`。
 - 想回到初始数据：清掉浏览器里 `airport-ground-handling:entries` 这一项，或调用 `resetModule(模块)`。

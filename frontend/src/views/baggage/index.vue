@@ -46,6 +46,7 @@
           <td v-for="column in columns" :key="column">{{ row[column] ?? '—' }}</td>
           <td>{{ row.status }}</td>
           <td class="row-actions">
+            <button class="link" type="button" @click="openDetail(row)">查看</button>
             <button
               v-for="action in actions"
               :key="action"
@@ -63,8 +64,25 @@
       </tbody>
     </table>
 
+    <section v-if="detailRow" class="detail-panel">
+      <header class="detail-head">
+        <h3>转运详情：{{ detailRow['转运编号'] }}</h3>
+        <button class="btn ghost" type="button" @click="closeDetail">关闭</button>
+      </header>
+      <dl class="detail-grid">
+        <template v-for="column in columns" :key="column">
+          <dt>{{ column }}</dt>
+          <dd>{{ detailRow[column] ?? '—' }}</dd>
+        </template>
+        <dt>当前状态</dt>
+        <dd>{{ detailRow.status }}</dd>
+      </dl>
+    </section>
+
     <footer class="page-foot">
       <span>共 {{ total }} 条行李转运记录</span>
+      <span v-if="notice" class="notice-text">{{ notice }}</span>
+      <span v-if="infoMessage" class="info-text">{{ infoMessage }}</span>
       <span v-if="errorMessage" class="error-text">{{ errorMessage }}</span>
     </footer>
   </section>
@@ -75,6 +93,7 @@ import { computed, onMounted, ref } from 'vue'
 
 import {
   downloadEntries,
+  initNotice,
   listEntries,
   moduleMeta,
   runAction as applyAction,
@@ -90,6 +109,9 @@ const stats = [{"label": "待卸机航班", "value": 0}, {"label": "转运中航
 const rows = ref<EntryRow[]>([])
 const total = ref(0)
 const errorMessage = ref('')
+const infoMessage = ref('')
+const notice = ref('')
+const detailRow = ref<EntryRow | null>(null)
 const filters = ref<Record<string, string>>({})
 const filterFields = columns.slice(0, 3)
 const statusSummary = computed(() =>
@@ -112,13 +134,24 @@ function openCreate() {
   errorMessage.value = '行李转运登记入口尚未接入审批流'
 }
 
+// 详情直接引用列表里的同一行对象，行李件数、到达转盘等字段与列表永远同源。
+function openDetail(row: EntryRow) {
+  detailRow.value = row
+}
+
+function closeDetail() {
+  detailRow.value = null
+}
+
 function runAction(action: string, row: EntryRow) {
   errorMessage.value = ''
+  infoMessage.value = ''
   const result = applyAction(meta.key, Number(row.id), action)
   if (!result.ok) {
     errorMessage.value = result.message
     return
   }
+  infoMessage.value = result.message
   reload()
 }
 
@@ -128,10 +161,18 @@ function reload() {
     const payload = listEntries(meta.key, filters.value)
     rows.value = payload.items
     total.value = payload.total
+    if (detailRow.value) {
+      // 刷新后按编号重新绑定详情，保证详情与列表看到的是同一份数据
+      const current = detailRow.value
+      detailRow.value = rows.value.find((row) => Number(row.id) === Number(current.id)) ?? null
+    }
   } catch (error) {
     errorMessage.value = error instanceof Error ? error.message : '行李转运列表读取失败'
   }
 }
 
-onMounted(reload)
+onMounted(() => {
+  notice.value = initNotice() ?? ''
+  reload()
+})
 </script>
